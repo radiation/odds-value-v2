@@ -1,0 +1,68 @@
+[project]
+name = "odds-value"
+version = "0.1.0"
+description = "Sports expected value system"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer",
+    "pydantic",
+    "pydantic-settings",
+    "python-dotenv",
+    "sqlalchemy",
+    "psycopg2-binary",
+    "alembic",
+    "httpx",
+    "python-dateutil",
+    "numpy>=2.0,<3.0",
+    "scikit-learn",
+    "pandas>=2.1,<3",
+    "nfl_data_py",
+    "nbconvert>=7.17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "ruff",
+  "black",
+  "mypy",
+  "types-python-dateutil",
+]
+
+[project.scripts]
+odds-value = "odds_value.cli.app:app"
+
+[tool.uv]
+package = true
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src"]
+exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"] # black handles line length
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = ["src"]
+packages = ["odds_value"]
+explicit_package_bases = true
+exclude = "(^alembic/|^build/|^dist/)"
+plugins = []
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_any_generics = true
