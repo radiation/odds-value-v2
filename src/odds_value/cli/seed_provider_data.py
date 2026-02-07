@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import typer
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from odds_value.cli.common import session_scope
 from odds_value.db.enums import ProviderEnum, SportEnum
 from odds_value.db.models.core.league import League
 from odds_value.db.models.core.provider_league import ProviderLeague
 from odds_value.db.models.core.provider_sport import ProviderSport
 
+from odds_value.db.repos.core.league_repo import LeagueRepository
+from odds_value.db.repos.core.provider_league_repo import ProviderLeagueRepository
+from odds_value.db.repos.core.provider_sport_repo import ProviderSportRepository
+
 
 API_SPORTS_BASEBALL_BASE_URL = "https://v1.baseball.api-sports.io"
 API_SPORTS_BASKETBALL_BASE_URL = "https://v1.basketball.api-sports.io"
 API_SPORTS_FOOTBALL_BASE_URL = "https://v1.american-football.api-sports.io"
-API_SPORTS_BASEBALL_ID = "999" # TODO: Get actual MLB league ID
+
+API_SPORTS_BASEBALL_ID = "999"  # TODO: Get actual MLB league ID
 API_SPORTS_BASKETBALL_ID = "12"
 API_SPORTS_NFL_LEAGUE_ID = "1"
 
@@ -80,75 +82,81 @@ provider_leagues_to_seed: list[ProviderLeague] = [
     ),
 ]
 
-def upsert_league(session: Session, league: League) -> League:
-    existing = session.execute(
-        select(League).where(League.league_key == league.league_key)
-    ).scalar_one_or_none()
-
-    if existing is None:
-        session.add(league)
-        return league
-
-    # Optional: keep names/country updated
-    existing.name = league.name
-    existing.sport = league.sport
-    existing.country = league.country
-    return existing
-
-
-def upsert_provider_sport(session: Session, ps: ProviderSport) -> ProviderSport:
-    existing = session.execute(
-        select(ProviderSport).where(
-            ProviderSport.provider == ps.provider,
-            ProviderSport.sport == ps.sport,
-        )
-    ).scalar_one_or_none()
-
-    if existing is None:
-        session.add(ps)
-        return ps
-
-    existing.base_url = ps.base_url
-    return existing
-
-
-def upsert_provider_league(session: Session, pl: ProviderLeague) -> ProviderLeague:
-    # Ensure League row exists
-    league = session.execute(
-        select(League).where(League.league_key == pl.league.league_key)
-    ).scalar_one()
-
-    existing = session.execute(
-        select(ProviderLeague).where(
-            ProviderLeague.provider == pl.provider,
-            ProviderLeague.league_id == league.id,
-        )
-    ).scalar_one_or_none()
-
-    if existing is None:
-        row = ProviderLeague(
-            provider=pl.provider,
-            league_id=league.id,
-            provider_league_id=pl.provider_league_id,
-            provider_league_name=pl.provider_league_name,
-        )
-        session.add(row)
-        return row
-
-    existing.provider_league_id = pl.provider_league_id
-    existing.provider_league_name = pl.provider_league_name
-    return existing
-
 
 @app.command("seed-all")
 def seed_provider_data() -> None:
     with session_scope() as session:
+        league_repo = LeagueRepository(session)
+        provider_sport_repo = ProviderSportRepository(session)
+        provider_league_repo = ProviderLeagueRepository(session)
+
+        # ---- Leagues (upsert) ----
+        league_by_key: dict[str, League] = {}
+
         for league in leagues_to_seed:
-            upsert_league(session, league)
-        session.flush()  # Ensure leagues have IDs for provider league foreign keys
-        for provider_sport in provider_sports_to_seed:
-            upsert_provider_sport(session, provider_sport)
-        for provider_league in provider_leagues_to_seed:
-            upsert_provider_league(session, provider_league)
+            existing = league_repo.first_where(League.league_key == league.league_key)
+            if existing is None:
+                league_repo.add(league, flush=False)
+                league_by_key[league.league_key] = league
+            else:
+                league_repo.patch(
+                    existing,
+                    {
+                        "name": league.name,
+                        "sport": league.sport,
+                        "country": league.country,
+                    },
+                    flush=False,
+                )
+                league_by_key[existing.league_key] = existing
+
+        # ensure IDs exist for provider leagues
+        session.flush()
+
+        # ---- Provider sports (upsert) ----
+        for ps in provider_sports_to_seed:
+            existing = provider_sport_repo.first_where(
+                ProviderSport.provider == ps.provider,
+                ProviderSport.sport == ps.sport,
+            )
+            if existing is None:
+                provider_sport_repo.add(ps, flush=False)
+            else:
+                provider_sport_repo.patch(
+                    existing,
+                    {"base_url": ps.base_url},
+                    flush=False,
+                )
+
+        # ---- Provider leagues (upsert) ----
+        for pl in provider_leagues_to_seed:
+            league_key = pl.league.league_key
+            league_row = league_by_key.get(league_key)
+            if league_row is None:
+                league_row = league_repo.one_where(League.league_key == league_key)
+
+            existing = provider_league_repo.first_where(
+                ProviderLeague.provider == pl.provider,
+                ProviderLeague.league_id == league_row.id,
+            )
+            if existing is None:
+                row = ProviderLeague(
+                    provider=pl.provider,
+                    league_id=league_row.id,
+                    provider_league_id=pl.provider_league_id,
+                    provider_league_name=pl.provider_league_name,
+                )
+                provider_league_repo.add(row, flush=False)
+            else:
+                provider_league_repo.patch(
+                    existing,
+                    {
+                        "provider_league_id": pl.provider_league_id,
+                        "provider_league_name": pl.provider_league_name,
+                    },
+                    flush=False,
+                )
+
+        session.commit()
 
     typer.echo("Provider & league data seeded.")

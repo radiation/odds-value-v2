@@ -14,7 +14,6 @@ class Team(Base, TimestampMixin):
     league_id: Mapped[int] = mapped_column(
         ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False
     )
-    provider_team_id: Mapped[str] = mapped_column(String, nullable=False)
 
     name: Mapped[str] = mapped_column(String, nullable=False)
     abbreviation: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -40,7 +39,6 @@ class Team(Base, TimestampMixin):
     team_game_stats: Mapped[list[TeamGameStats]] = relationship(back_populates="team")
 
     __table_args__ = (
-        UniqueConstraint("league_id", "provider_team_id", name="uq_teams_league_provider_team_id"),
         Index("ix_teams_league_active", "league_id", "is_active"),
         Index("ix_teams_abbreviation", "abbreviation"),
     )
