@@ -1,5 +1,7 @@
 from odds_value.db.models.core.game import Game
 from odds_value.db.models.core.league import League
+from odds_value.db.models.core.provider_league import ProviderLeague
+from odds_value.db.models.core.provider_sport import ProviderSport
 from odds_value.db.models.core.season import Season
 from odds_value.db.models.core.team import Team
 from odds_value.db.models.core.venue import Venue
@@ -19,6 +21,8 @@ __all__ = [
     "IngestedPayload",
     "League",
     "OddsSnapshot",
+    "ProviderLeague",
+    "ProviderSport",
     "Season",
     "Team",
     "TeamGameState",

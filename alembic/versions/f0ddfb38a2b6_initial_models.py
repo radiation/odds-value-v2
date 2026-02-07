@@ -1,8 +1,8 @@
 """Initial models
 
-Revision ID: 4609e20272e9
+Revision ID: f0ddfb38a2b6
 Revises: 
-Create Date: 2026-02-05 19:16:36.119243
+Create Date: 2026-02-06 10:02:42.879568
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '4609e20272e9'
+revision: str = 'f0ddfb38a2b6'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -45,17 +45,42 @@ def upgrade() -> None:
     op.create_index('ix_ingested_payloads_lookup', 'ingested_payloads', ['provider', 'entity_type', 'entity_key', 'fetched_at'], unique=False)
     op.create_table('leagues',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('provider_league_id', sa.String(), nullable=False),
+    sa.Column('league_key', sa.String(), nullable=False),
     sa.Column('name', sa.String(), nullable=False),
-    sa.Column('sport', sa.Enum('NFL', 'NBA', 'MLB', 'NHL', 'NCAAF', 'NCAAB', 'WNBA', 'EPL', 'OTHER', name='sportenum'), nullable=False),
+    sa.Column('sport', sa.Enum('BASEBALL', 'BASKETBALL', 'FOOTBALL', 'HOCKEY', 'SOCCER', name='sportenum'), nullable=False),
     sa.Column('country', sa.String(), nullable=True),
     sa.Column('is_active', sa.Boolean(), server_default='true', nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('provider_league_id')
+    sa.UniqueConstraint('league_key')
     )
     op.create_index('ix_leagues_sport_active', 'leagues', ['sport', 'is_active'], unique=False)
+    op.create_table('provider_sports',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('provider', sa.Enum('API_SPORTS', 'NFLVERSE', 'ODDS_API', name='provider_enum'), nullable=False),
+    sa.Column('sport', sa.Enum('BASEBALL', 'BASKETBALL', 'FOOTBALL', 'HOCKEY', 'SOCCER', name='sport_enum'), nullable=False),
+    sa.Column('base_url', sa.String(length=255), nullable=False),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('provider', 'sport', name='uq_provider_sports_provider_sport')
+    )
+    op.create_index(op.f('ix_provider_sports_provider'), 'provider_sports', ['provider'], unique=False)
+    op.create_index(op.f('ix_provider_sports_sport'), 'provider_sports', ['sport'], unique=False)
+    op.create_table('provider_leagues',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('provider', sa.Enum('API_SPORTS', 'NFLVERSE', 'ODDS_API', name='provider_enum'), nullable=False),
+    sa.Column('league_id', sa.Integer(), nullable=False),
+    sa.Column('provider_league_id', sa.String(length=64), nullable=False),
+    sa.Column('provider_league_name', sa.String(length=120), nullable=True),
+    sa.Column('logo_url', sa.String(length=255), nullable=True),
+    sa.Column('country_code', sa.String(length=8), nullable=True),
+    sa.ForeignKeyConstraint(['league_id'], ['leagues.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('provider', 'league_id', name='uq_provider_leagues_provider_league_id'),
+    sa.UniqueConstraint('provider', 'provider_league_id', name='uq_provider_leagues_provider_provider_league_id')
+    )
+    op.create_index(op.f('ix_provider_leagues_league_id'), 'provider_leagues', ['league_id'], unique=False)
+    op.create_index(op.f('ix_provider_leagues_provider'), 'provider_leagues', ['provider'], unique=False)
     op.create_table('seasons',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('league_id', sa.Integer(), nullable=False),
@@ -122,7 +147,6 @@ def upgrade() -> None:
     sa.Column('start_time', sa.DateTime(), nullable=False),
     sa.Column('venue_id', sa.Integer(), nullable=True),
     sa.Column('status', sa.Enum('SCHEDULED', 'IN_PROGRESS', 'FINAL', 'POSTPONED', 'CANCELED', 'UNKNOWN', name='gamestatusenum'), nullable=False),
-    sa.Column('week', sa.Integer(), nullable=True),
     sa.Column('is_neutral_site', sa.Boolean(), server_default='false', nullable=False),
     sa.Column('home_team_id', sa.Integer(), nullable=False),
     sa.Column('away_team_id', sa.Integer(), nullable=False),
@@ -282,6 +306,12 @@ def downgrade() -> None:
     op.drop_table('teams')
     op.drop_index('ix_seasons_league_active', table_name='seasons')
     op.drop_table('seasons')
+    op.drop_index(op.f('ix_provider_leagues_provider'), table_name='provider_leagues')
+    op.drop_index(op.f('ix_provider_leagues_league_id'), table_name='provider_leagues')
+    op.drop_table('provider_leagues')
+    op.drop_index(op.f('ix_provider_sports_sport'), table_name='provider_sports')
+    op.drop_index(op.f('ix_provider_sports_provider'), table_name='provider_sports')
+    op.drop_table('provider_sports')
     op.drop_index('ix_leagues_sport_active', table_name='leagues')
     op.drop_table('leagues')
     op.drop_index('ix_ingested_payloads_lookup', table_name='ingested_payloads')

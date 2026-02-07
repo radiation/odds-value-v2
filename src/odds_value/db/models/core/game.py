@@ -38,7 +38,6 @@ class Game(Base, TimestampMixin):
     )
 
     status: Mapped[GameStatusEnum] = mapped_column(nullable=False, default=GameStatusEnum.UNKNOWN)
-    week: Mapped[int | None] = mapped_column(Integer, nullable=True)  # NFL specific
     is_neutral_site: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

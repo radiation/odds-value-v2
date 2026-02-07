@@ -10,15 +10,11 @@ class ProviderEnum(StrEnum):
 
 
 class SportEnum(str, Enum):
-    NFL = "NFL"
-    NBA = "NBA"
-    MLB = "MLB"
-    NHL = "NHL"
-    NCAAF = "NCAAF"
-    NCAAB = "NCAAB"
-    WNBA = "WNBA"
-    EPL = "EPL"
-    OTHER = "OTHER"
+    BASEBALL = "BASEBALL"
+    BASKETBALL = "BASKETBALL"
+    FOOTBALL = "FOOTBALL"
+    HOCKEY = "HOCKEY"
+    SOCCER = "SOCCER"
 
 
 class GameStatusEnum(str, Enum):
