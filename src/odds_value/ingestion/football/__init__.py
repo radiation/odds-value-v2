@@ -1,0 +1,1 @@
+"""Football-specific ingestion utilities."""

@@ -23,6 +23,8 @@ from odds_value.db.repos.core.provider_sport_repo import ProviderSportRepository
 from odds_value.db.repos.core.season_repo import SeasonRepository
 from odds_value.db.repos.core.team_repo import TeamRepository
 from odds_value.db.repos.core.venue_repo import VenueRepository
+from odds_value.ingestion.dates import parse_api_sports_game_datetime
+from odds_value.ingestion.football.nfl_calendar import in_nfl_regular_season_window
 from odds_value.ingestion.providers.api_sports.client import ApiSportsClient
 from odds_value.ingestion.providers.base.client import BaseHttpClient
 
@@ -56,12 +58,6 @@ def _map_status(short: str | None) -> GameStatusEnum:
         return GameStatusEnum.CANCELED
 
     return GameStatusEnum.IN_PROGRESS
-
-
-def _utc_from_timestamp(ts: int | None) -> datetime:
-    if ts is None:
-        return datetime.now(tz=UTC)
-    return datetime.fromtimestamp(ts, tz=UTC)
 
 
 def _get_api_sports_base_url(session: Session) -> str:
@@ -231,15 +227,14 @@ def ingest_api_sports_american_football_season(
                 status_short = ss
 
         date_obj = game_obj.get("date")
-        ts: int | None = None
-        if isinstance(date_obj, dict):
-            raw_ts = date_obj.get("timestamp")
-            if isinstance(raw_ts, int):
-                ts = raw_ts
-            elif isinstance(raw_ts, str) and raw_ts.isdigit():
-                ts = int(raw_ts)
+        try:
+            start_time = parse_api_sports_game_datetime(date_obj, provider_game_id=provider_game_id)
+        except ValueError:
+            continue
 
-        start_time = _utc_from_timestamp(ts)
+        # Payload-agnostic filter: only persist NFL regular season games.
+        if league_key == "NFL" and not in_nfl_regular_season_window(start_time, season_year):
+            continue
 
         home_total: int | None = None
         away_total: int | None = None
