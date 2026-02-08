@@ -8,8 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from odds_value.db.base import Base, TimestampMixin
 
 
-class TeamGameState(Base, TimestampMixin):
-    __tablename__ = "team_game_state"
+class FootballTeamGameState(Base, TimestampMixin):
+    __tablename__ = "football_team_game_state"
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
@@ -66,10 +66,14 @@ class TeamGameState(Base, TimestampMixin):
     season: Mapped[Season] = relationship("Season")
 
     __table_args__ = (
-        UniqueConstraint("team_id", "game_id", name="uq_team_game_state_team_game"),
-        Index("ix_team_game_state_team_start_time", "team_id", "start_time"),
-        Index("ix_team_game_state_game", "game_id"),
-        Index("ix_team_game_state_season_week", "season_id", "week"),
+        UniqueConstraint(
+            "team_id",
+            "game_id",
+            name="uq_football_team_game_state_team_game",
+        ),
+        Index("ix_football_team_game_state_team_start_time", "team_id", "start_time"),
+        Index("ix_football_team_game_state_game", "game_id"),
+        Index("ix_football_team_game_state_season_week", "season_id", "week"),
     )
 
 
