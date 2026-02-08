@@ -26,6 +26,7 @@ class ProviderCapabilityError(ProviderError):
 @dataclass(frozen=True)
 class ProviderMappingError(ProviderError):
     """Mapping/extraction failed due to unexpected schema or values."""
+
     message: str
     context: dict[str, object] | None = None
 

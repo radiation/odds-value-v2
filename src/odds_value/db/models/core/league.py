@@ -36,6 +36,7 @@ class League(Base, TimestampMixin):
         cascade="all, delete-orphan",
     )
 
+
 from odds_value.db.models.core.game import Game  # noqa: E402
 from odds_value.db.models.core.provider_league import ProviderLeague  # noqa: E402
 from odds_value.db.models.core.season import Season  # noqa: E402

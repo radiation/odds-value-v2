@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, Index, String
+from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from odds_value.db.base import Base, TimestampMixin
@@ -14,6 +14,9 @@ class Team(Base, TimestampMixin):
     league_id: Mapped[int] = mapped_column(
         ForeignKey("leagues.id", ondelete="CASCADE"), nullable=False
     )
+
+    # Provider-specific identifier (currently required by the DB schema for idempotent ingestion).
+    provider_team_id: Mapped[str] = mapped_column(String, nullable=False)
 
     name: Mapped[str] = mapped_column(String, nullable=False)
     abbreviation: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -38,7 +41,13 @@ class Team(Base, TimestampMixin):
 
     team_game_stats: Mapped[list[TeamGameStats]] = relationship(back_populates="team")
 
+    provider_mappings: Mapped[list[ProviderTeam]] = relationship(
+        back_populates="team",
+        cascade="all, delete-orphan",
+    )
+
     __table_args__ = (
+        UniqueConstraint("league_id", "provider_team_id", name="uq_teams_league_provider_team_id"),
         Index("ix_teams_league_active", "league_id", "is_active"),
         Index("ix_teams_abbreviation", "abbreviation"),
     )
@@ -46,4 +55,5 @@ class Team(Base, TimestampMixin):
 
 from odds_value.db.models.core.game import Game  # noqa: E402
 from odds_value.db.models.core.league import League  # noqa: E402
+from odds_value.db.models.core.provider_team import ProviderTeam  # noqa: E402
 from odds_value.db.models.features.team_game_stats import TeamGameStats  # noqa: E402
