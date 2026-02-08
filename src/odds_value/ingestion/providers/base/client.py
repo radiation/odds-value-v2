@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from types import TracebackType
+from typing import Any
 
 import httpx
 
 from .errors import ProviderRateLimited, ProviderRequestError
-
 
 Json = dict[str, Any]
 
@@ -42,7 +43,12 @@ class BaseHttpClient:
     def __enter__(self) -> BaseHttpClient:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.close()
 
     def request_json(

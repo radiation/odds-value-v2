@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Callable
-
 from sqlalchemy.orm import Session
 
 from odds_value.db.enums import ProviderEnum, SportEnum

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from odds_value.db.models.core.game import Season
+from odds_value.db.models.core.season import Season
 from odds_value.db.repos.base import BaseRepository
 
 

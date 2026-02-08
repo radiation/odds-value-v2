@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from odds_value.db.base import Base, TimestampMixin

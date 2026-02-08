@@ -7,11 +7,9 @@ from odds_value.db.enums import ProviderEnum, SportEnum
 from odds_value.db.models.core.league import League
 from odds_value.db.models.core.provider_league import ProviderLeague
 from odds_value.db.models.core.provider_sport import ProviderSport
-
 from odds_value.db.repos.core.league_repo import LeagueRepository
 from odds_value.db.repos.core.provider_league_repo import ProviderLeagueRepository
 from odds_value.db.repos.core.provider_sport_repo import ProviderSportRepository
-
 
 API_SPORTS_BASEBALL_BASE_URL = "https://v1.baseball.api-sports.io"
 API_SPORTS_BASKETBALL_BASE_URL = "https://v1.basketball.api-sports.io"
@@ -94,13 +92,13 @@ def seed_provider_data() -> None:
         league_by_key: dict[str, League] = {}
 
         for league in leagues_to_seed:
-            existing = league_repo.first_where(League.league_key == league.league_key)
-            if existing is None:
+            existing_league = league_repo.first_where(League.league_key == league.league_key)
+            if existing_league is None:
                 league_repo.add(league, flush=False)
                 league_by_key[league.league_key] = league
             else:
                 league_repo.patch(
-                    existing,
+                    existing_league,
                     {
                         "name": league.name,
                         "sport": league.sport,
@@ -108,22 +106,22 @@ def seed_provider_data() -> None:
                     },
                     flush=False,
                 )
-                league_by_key[existing.league_key] = existing
+                league_by_key[existing_league.league_key] = existing_league
 
         # ensure IDs exist for provider leagues
         session.flush()
 
         # ---- Provider sports (upsert) ----
         for ps in provider_sports_to_seed:
-            existing = provider_sport_repo.first_where(
+            existing_provider_sport = provider_sport_repo.first_where(
                 ProviderSport.provider == ps.provider,
                 ProviderSport.sport == ps.sport,
             )
-            if existing is None:
+            if existing_provider_sport is None:
                 provider_sport_repo.add(ps, flush=False)
             else:
                 provider_sport_repo.patch(
-                    existing,
+                    existing_provider_sport,
                     {"base_url": ps.base_url},
                     flush=False,
                 )
@@ -135,11 +133,11 @@ def seed_provider_data() -> None:
             if league_row is None:
                 league_row = league_repo.one_where(League.league_key == league_key)
 
-            existing = provider_league_repo.first_where(
+            existing_provider_league = provider_league_repo.first_where(
                 ProviderLeague.provider == pl.provider,
                 ProviderLeague.league_id == league_row.id,
             )
-            if existing is None:
+            if existing_provider_league is None:
                 row = ProviderLeague(
                     provider=pl.provider,
                     league_id=league_row.id,
@@ -149,7 +147,7 @@ def seed_provider_data() -> None:
                 provider_league_repo.add(row, flush=False)
             else:
                 provider_league_repo.patch(
-                    existing,
+                    existing_provider_league,
                     {
                         "provider_league_id": pl.provider_league_id,
                         "provider_league_name": pl.provider_league_name,

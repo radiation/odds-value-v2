@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from enum import Enum, StrEnum
+from enum import StrEnum
 
 
 class ProviderEnum(StrEnum):
@@ -9,7 +9,7 @@ class ProviderEnum(StrEnum):
     ODDS_API = "odds_api"
 
 
-class SportEnum(str, Enum):
+class SportEnum(StrEnum):
     BASEBALL = "BASEBALL"
     BASKETBALL = "BASKETBALL"
     FOOTBALL = "FOOTBALL"
@@ -17,7 +17,7 @@ class SportEnum(str, Enum):
     SOCCER = "SOCCER"
 
 
-class GameStatusEnum(str, Enum):
+class GameStatusEnum(StrEnum):
     SCHEDULED = "SCHEDULED"
     IN_PROGRESS = "IN_PROGRESS"
     FINAL = "FINAL"
@@ -26,27 +26,27 @@ class GameStatusEnum(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
-class RoofTypeEnum(str, Enum):
+class RoofTypeEnum(StrEnum):
     DOME = "DOME"
     RETRACTABLE = "RETRACTABLE"
     OPEN = "OPEN"
     UNKNOWN = "UNKNOWN"
 
 
-class SurfaceTypeEnum(str, Enum):
+class SurfaceTypeEnum(StrEnum):
     GRASS = "GRASS"
     TURF = "TURF"
     HYBRID = "HYBRID"
     UNKNOWN = "UNKNOWN"
 
 
-class MarketTypeEnum(str, Enum):
+class MarketTypeEnum(StrEnum):
     SPREAD = "SPREAD"
     TOTAL = "TOTAL"
     MONEYLINE = "MONEYLINE"
 
 
-class SideTypeEnum(str, Enum):
+class SideTypeEnum(StrEnum):
     # Spread / Moneyline
     HOME = "HOME"
     AWAY = "AWAY"

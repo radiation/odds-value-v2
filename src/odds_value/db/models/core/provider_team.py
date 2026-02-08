@@ -7,6 +7,7 @@ from odds_value.db.base import Base
 from odds_value.db.enums import ProviderEnum
 from odds_value.db.models.core.team import Team
 
+
 class ProviderTeam(Base):
     __tablename__ = "provider_teams"
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Generic, TypeVar
 
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from odds_value.db.base import Base
 ModelT = TypeVar("ModelT", bound=Base)
 
 
-class BaseRepository(Generic[ModelT]):
+class BaseRepository(Generic[ModelT]):  # noqa: UP046
     def __init__(self, session: Session, model: type[ModelT]) -> None:
         self.session = session
         self.model = model

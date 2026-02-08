@@ -30,14 +30,14 @@ class League(Base, TimestampMixin):
 
     __table_args__ = (Index("ix_leagues_sport_active", "sport", "is_active"),)
 
-    provider_mappings: Mapped[list["ProviderLeague"]] = relationship(
+    provider_mappings: Mapped[list[ProviderLeague]] = relationship(
         "ProviderLeague",
         back_populates="league",
         cascade="all, delete-orphan",
     )
 
 from odds_value.db.models.core.game import Game  # noqa: E402
+from odds_value.db.models.core.provider_league import ProviderLeague  # noqa: E402
 from odds_value.db.models.core.season import Season  # noqa: E402
 from odds_value.db.models.core.team import Team  # noqa: E402
 from odds_value.db.models.core.venue import Venue  # noqa: E402
-from odds_value.db.models.core.provider_league import ProviderLeague  # noqa: E402
