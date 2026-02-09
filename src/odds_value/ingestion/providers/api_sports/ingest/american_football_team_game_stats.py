@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from odds_value.core.config import settings
@@ -51,6 +51,7 @@ class IngestAmericanFootballTeamGameStatsSeasonResult:
     games_seen: int
     games_processed: int
     games_failed: int
+    games_skipped_existing: int
     failed_game_ids_sample: list[str]
     failure_reasons: dict[str, int]
     items_seen: int
@@ -81,14 +82,17 @@ def fetch_api_sports_american_football_team_stats_for_game(
     session: Session,
     *,
     provider_game_id: str,
+    client: ApiSportsClient | None = None,
 ) -> list[ApiItem]:
     """Fetch API-Sports american-football team stats for a single game."""
 
-    base_url = _get_api_sports_base_url(session)
-    api_key = settings.require_api_sports_key()
+    created_http: BaseHttpClient | None = None
+    if client is None:
+        base_url = _get_api_sports_base_url(session)
+        api_key = settings.require_api_sports_key()
+        created_http = BaseHttpClient(base_url=base_url)
+        client = ApiSportsClient(http=created_http, api_key=api_key)
 
-    http = BaseHttpClient(base_url=base_url)
-    client = ApiSportsClient(http=http, api_key=api_key)
     try:
         # API-Sports docs/behavior has varied between `game` and `id` params; try both.
         try:
@@ -102,7 +106,8 @@ def fetch_api_sports_american_football_team_stats_for_game(
                 params={"id": str(provider_game_id)},
             )
     finally:
-        http.close()
+        if created_http is not None:
+            created_http.close()
 
 
 def ingest_api_sports_american_football_team_game_stats(
@@ -110,6 +115,7 @@ def ingest_api_sports_american_football_team_game_stats(
     *,
     provider_game_id: str,
     items: list[ApiItem] | None = None,
+    client: ApiSportsClient | None = None,
 ) -> IngestAmericanFootballTeamGameStatsResult:
     """Upsert team-game stats for a single API-Sports american-football game."""
 
@@ -127,6 +133,7 @@ def ingest_api_sports_american_football_team_game_stats(
         items = fetch_api_sports_american_football_team_stats_for_game(
             session,
             provider_game_id=str(provider_game_id),
+            client=client,
         )
 
     now = datetime.now(tz=UTC)
@@ -267,6 +274,7 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
     only_final: bool = True,
     sleep_seconds: float = 0.0,
     commit_every: int = 25,
+    skip_existing: bool = True,
     show_failures: bool = False,
     failures_limit: int = 25,
     stop_on_failure: bool = False,
@@ -302,6 +310,7 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
 
     games_processed = 0
     games_failed = 0
+    games_skipped_existing = 0
     failed_game_ids_sample: list[str] = []
     failure_reasons: dict[str, int] = {}
     items_seen = 0
@@ -310,47 +319,80 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
     fb_created = 0
     fb_updated = 0
 
-    for idx, game in enumerate(games, start=1):
-        try:
-            per_game_items = None
-            if items_by_provider_game_id is not None:
-                per_game_items = items_by_provider_game_id.get(game.provider_game_id)
+    http: BaseHttpClient | None = None
+    api_client: ApiSportsClient | None = None
+    if items_by_provider_game_id is None:
+        base_url = _get_api_sports_base_url(session)
+        api_key = settings.require_api_sports_key()
+        http = BaseHttpClient(base_url=base_url)
+        api_client = ApiSportsClient(http=http, api_key=api_key)
 
-            # Isolate each game in a SAVEPOINT so a single failure doesn't poison
-            # the whole batch or force us to rollback prior successes.
-            with session.begin_nested():
-                result = ingest_api_sports_american_football_team_game_stats(
-                    session,
-                    provider_game_id=game.provider_game_id,
-                    items=per_game_items,
-                )
+    complete_game_ids: set[int] = set()
+    if skip_existing and games:
+        # A game is considered "complete" for our purposes if both teams have
+        # football stats rows already present (2 per NFL game).
+        complete_stmt = (
+            select(TeamGameStats.game_id)
+            .select_from(TeamGameStats)
+            .join(
+                FootballTeamGameStats,
+                FootballTeamGameStats.team_game_stats_id == TeamGameStats.id,
+            )
+            .where(TeamGameStats.game_id.in_([g.id for g in games]))
+            .group_by(TeamGameStats.game_id)
+            .having(func.count(TeamGameStats.id) >= 2)
+        )
+        complete_game_ids = set(session.execute(complete_stmt).scalars().all())
 
-            items_seen += result.items_seen
-            tgs_created += result.team_game_stats_created
-            tgs_updated += result.team_game_stats_updated
-            fb_created += result.football_stats_created
-            fb_updated += result.football_stats_updated
-            games_processed += 1
-        except Exception as exc:
-            games_failed += 1
-            reason = _format_failure_reason(exc)
-            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-            if len(failed_game_ids_sample) < max(0, failures_limit):
-                failed_game_ids_sample.append(str(game.provider_game_id))
-            if show_failures:
-                print(f"FAILED provider_game_id={game.provider_game_id} | {reason}")
-            if stop_on_failure:
-                raise
-            # If SQLAlchemy marked the session as inactive due to a DB error,
-            # we must rollback to proceed.
-            if not session.is_active:
-                session.rollback()
+    try:
+        for idx, game in enumerate(games, start=1):
+            if skip_existing and game.id in complete_game_ids:
+                games_skipped_existing += 1
+                continue
+            try:
+                per_game_items = None
+                if items_by_provider_game_id is not None:
+                    per_game_items = items_by_provider_game_id.get(game.provider_game_id)
 
-        if commit_every > 0 and idx % commit_every == 0:
-            session.commit()
+                # Isolate each game in a SAVEPOINT so a single failure doesn't poison
+                # the whole batch or force us to rollback prior successes.
+                with session.begin_nested():
+                    result = ingest_api_sports_american_football_team_game_stats(
+                        session,
+                        provider_game_id=game.provider_game_id,
+                        items=per_game_items,
+                        client=api_client,
+                    )
 
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+                items_seen += result.items_seen
+                tgs_created += result.team_game_stats_created
+                tgs_updated += result.team_game_stats_updated
+                fb_created += result.football_stats_created
+                fb_updated += result.football_stats_updated
+                games_processed += 1
+            except Exception as exc:
+                games_failed += 1
+                reason = _format_failure_reason(exc)
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                if len(failed_game_ids_sample) < max(0, failures_limit):
+                    failed_game_ids_sample.append(str(game.provider_game_id))
+                if show_failures:
+                    print(f"FAILED provider_game_id={game.provider_game_id} | {reason}")
+                if stop_on_failure:
+                    raise
+                # If SQLAlchemy marked the session as inactive due to a DB error,
+                # we must rollback to proceed.
+                if not session.is_active:
+                    session.rollback()
+
+            if commit_every > 0 and idx % commit_every == 0:
+                session.commit()
+
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+    finally:
+        if http is not None:
+            http.close()
 
     session.commit()
 
@@ -360,6 +402,7 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
         games_seen=len(games),
         games_processed=games_processed,
         games_failed=games_failed,
+        games_skipped_existing=games_skipped_existing,
         failed_game_ids_sample=failed_game_ids_sample,
         failure_reasons=failure_reasons,
         items_seen=items_seen,

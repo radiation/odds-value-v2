@@ -184,3 +184,76 @@ def test_ingest_api_sports_team_game_stats_for_season_uses_db_games() -> None:
     assert result.items_seen == 4
     assert result.team_game_stats_created == 4
     assert result.football_stats_created == 4
+
+
+def test_ingest_api_sports_team_game_stats_for_season_skip_existing() -> None:
+    session = _make_session()
+
+    nfl = League(league_key="NFL", name="National Football League", sport=SportEnum.FOOTBALL)
+    session.add(nfl)
+    session.flush()
+
+    season = Season(league_id=nfl.id, year=2025, name="2025")
+    session.add(season)
+    session.flush()
+
+    home = Team(league_id=nfl.id, provider_team_id="12", name="Philadelphia Eagles")
+    away = Team(league_id=nfl.id, provider_team_id="10", name="Cincinnati Bengals")
+    session.add_all([home, away])
+    session.flush()
+
+    game = Game(
+        league_id=nfl.id,
+        season_id=season.id,
+        provider=ProviderEnum.API_SPORTS,
+        provider_game_id="30001",
+        start_time=datetime(2025, 10, 1, 0, 0, tzinfo=UTC),
+        status=GameStatusEnum.FINAL,
+        is_neutral_site=False,
+        home_team_id=home.id,
+        away_team_id=away.id,
+        home_score=1,
+        away_score=2,
+    )
+    session.add(game)
+    session.commit()
+
+    items_by_game = {
+        "30001": [
+            {
+                "team": {"id": 12, "name": "Philadelphia Eagles", "logo": "x"},
+                "statistics": {"yards": {"total": 111}, "turnovers": {"total": 1}},
+            },
+            {
+                "team": {"id": 10, "name": "Cincinnati Bengals", "logo": "y"},
+                "statistics": {"yards": {"total": 222}, "turnovers": {"total": 2}},
+            },
+        ]
+    }
+
+    first = ingest_api_sports_american_football_team_game_stats_for_season(
+        session,
+        league_key="NFL",
+        season_year=2025,
+        items_by_provider_game_id=items_by_game,
+        sleep_seconds=0.0,
+        commit_every=0,
+        skip_existing=True,
+    )
+    assert first.games_seen == 1
+    assert first.games_processed == 1
+    assert first.games_skipped_existing == 0
+
+    second = ingest_api_sports_american_football_team_game_stats_for_season(
+        session,
+        league_key="NFL",
+        season_year=2025,
+        items_by_provider_game_id=items_by_game,
+        sleep_seconds=0.0,
+        commit_every=0,
+        skip_existing=True,
+    )
+    assert second.games_seen == 1
+    assert second.games_processed == 0
+    assert second.games_skipped_existing == 1
+    assert second.items_seen == 0

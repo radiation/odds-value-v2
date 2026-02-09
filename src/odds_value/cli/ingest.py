@@ -128,6 +128,11 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
         "--commit-every",
         help="Commit after this many games (0 disables intermediate commits).",
     ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Re-fetch and upsert stats even if already present (uses more API calls).",
+    ),
     show_failures: bool = typer.Option(
         False,
         "--show-failures/--no-show-failures",
@@ -155,6 +160,7 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
             only_final=not include_non_final,
             sleep_seconds=sleep_seconds,
             commit_every=commit_every,
+            skip_existing=not overwrite,
             show_failures=show_failures,
             failures_limit=failures_limit,
             stop_on_failure=stop_on_failure,
@@ -166,6 +172,7 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
                 f"Ingested season team stats {result.league_key} {result.season_year}:",
                 f"games_seen={result.games_seen}",
                 f"games_processed={result.games_processed}",
+                f"games_skipped_existing={result.games_skipped_existing}",
                 f"games_failed={result.games_failed}",
                 f"failed_ids_sample={len(result.failed_game_ids_sample)}",
                 f"items_seen={result.items_seen}",
