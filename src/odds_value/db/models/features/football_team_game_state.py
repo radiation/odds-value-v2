@@ -22,43 +22,43 @@ class FootballTeamGameState(Base, TimestampMixin):
 
     games_played: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Legacy, scheduled to be removed
-    avg_points_for: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    avg_points_against: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    avg_point_diff: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    # Convenience features
+    rest_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    games_l3: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    games_l5: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Offensive/Defensive splits
-    off_pts_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_pts_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_pts_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    off_pts_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_pts_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_pts_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    off_diff_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_diff_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_diff_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    off_diff_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_diff_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_diff_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    off_yards_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_yards_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_yards_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    off_yards_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_yards_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_yards_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    off_turnovers_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_turnovers_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    off_turnovers_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    off_turnovers_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_turnovers_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    off_turnovers_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    def_pa_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_pa_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_pa_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    def_pa_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_pa_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_pa_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    def_diff_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_diff_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_diff_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    def_diff_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_diff_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_diff_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    def_yards_allowed_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_yards_allowed_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_yards_allowed_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    def_yards_allowed_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_yards_allowed_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_yards_allowed_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
-    def_takeaways_l3: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_takeaways_l5: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
-    def_takeaways_season: Mapped[float | None] = mapped_column(nullable=False, default=0.0)
+    def_takeaways_l3: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_takeaways_l5: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    def_takeaways_season: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
     # Relationships
     team: Mapped[Team] = relationship("Team")

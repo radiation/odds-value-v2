@@ -128,6 +128,21 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
         "--commit-every",
         help="Commit after this many games (0 disables intermediate commits).",
     ),
+    show_failures: bool = typer.Option(
+        False,
+        "--show-failures/--no-show-failures",
+        help="Print provider_game_id + error for each failed game.",
+    ),
+    failures_limit: int = typer.Option(
+        25,
+        "--failures-limit",
+        help="Max failed provider_game_id values to retain in the returned summary.",
+    ),
+    stop_on_failure: bool = typer.Option(
+        False,
+        "--stop-on-failure",
+        help="Stop immediately and raise the underlying exception.",
+    ),
 ) -> None:
     """Fetch API-Sports team statistics for all games in a season and upsert."""
 
@@ -140,6 +155,9 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
             only_final=not include_non_final,
             sleep_seconds=sleep_seconds,
             commit_every=commit_every,
+            show_failures=show_failures,
+            failures_limit=failures_limit,
+            stop_on_failure=stop_on_failure,
         )
 
     typer.echo(
@@ -149,6 +167,7 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
                 f"games_seen={result.games_seen}",
                 f"games_processed={result.games_processed}",
                 f"games_failed={result.games_failed}",
+                f"failed_ids_sample={len(result.failed_game_ids_sample)}",
                 f"items_seen={result.items_seen}",
                 f"team_game_stats_created={result.team_game_stats_created}",
                 f"team_game_stats_updated={result.team_game_stats_updated}",
@@ -157,3 +176,9 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
             ]
         )
     )
+
+    if result.games_failed and result.failure_reasons:
+        top = sorted(result.failure_reasons.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        typer.echo("Failures (top):")
+        for reason, count in top:
+            typer.echo(f"  {count}x {reason}")

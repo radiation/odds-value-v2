@@ -51,11 +51,21 @@ class IngestAmericanFootballTeamGameStatsSeasonResult:
     games_seen: int
     games_processed: int
     games_failed: int
+    failed_game_ids_sample: list[str]
+    failure_reasons: dict[str, int]
     items_seen: int
     team_game_stats_created: int
     team_game_stats_updated: int
     football_stats_created: int
     football_stats_updated: int
+
+
+def _format_failure_reason(exc: BaseException, *, max_len: int = 300) -> str:
+    msg = str(exc).strip() or exc.__class__.__name__
+    reason = f"{exc.__class__.__name__}: {msg}"
+    if len(reason) > max_len:
+        return f"{reason[: max_len - 1]}…"
+    return reason
 
 
 def _get_api_sports_base_url(session: Session) -> str:
@@ -257,6 +267,9 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
     only_final: bool = True,
     sleep_seconds: float = 0.0,
     commit_every: int = 25,
+    show_failures: bool = False,
+    failures_limit: int = 25,
+    stop_on_failure: bool = False,
     items_by_provider_game_id: dict[str, list[ApiItem]] | None = None,
 ) -> IngestAmericanFootballTeamGameStatsSeasonResult:
     """Fetch and upsert team-game stats for every game in a season.
@@ -289,6 +302,8 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
 
     games_processed = 0
     games_failed = 0
+    failed_game_ids_sample: list[str] = []
+    failure_reasons: dict[str, int] = {}
     items_seen = 0
     tgs_created = 0
     tgs_updated = 0
@@ -301,11 +316,14 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
             if items_by_provider_game_id is not None:
                 per_game_items = items_by_provider_game_id.get(game.provider_game_id)
 
-            result = ingest_api_sports_american_football_team_game_stats(
-                session,
-                provider_game_id=game.provider_game_id,
-                items=per_game_items,
-            )
+            # Isolate each game in a SAVEPOINT so a single failure doesn't poison
+            # the whole batch or force us to rollback prior successes.
+            with session.begin_nested():
+                result = ingest_api_sports_american_football_team_game_stats(
+                    session,
+                    provider_game_id=game.provider_game_id,
+                    items=per_game_items,
+                )
 
             items_seen += result.items_seen
             tgs_created += result.team_game_stats_created
@@ -313,10 +331,20 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
             fb_created += result.football_stats_created
             fb_updated += result.football_stats_updated
             games_processed += 1
-        except ProviderResponseError:
+        except Exception as exc:
             games_failed += 1
-        except Exception:
-            games_failed += 1
+            reason = _format_failure_reason(exc)
+            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+            if len(failed_game_ids_sample) < max(0, failures_limit):
+                failed_game_ids_sample.append(str(game.provider_game_id))
+            if show_failures:
+                print(f"FAILED provider_game_id={game.provider_game_id} | {reason}")
+            if stop_on_failure:
+                raise
+            # If SQLAlchemy marked the session as inactive due to a DB error,
+            # we must rollback to proceed.
+            if not session.is_active:
+                session.rollback()
 
         if commit_every > 0 and idx % commit_every == 0:
             session.commit()
@@ -332,6 +360,8 @@ def ingest_api_sports_american_football_team_game_stats_for_season(
         games_seen=len(games),
         games_processed=games_processed,
         games_failed=games_failed,
+        failed_game_ids_sample=failed_game_ids_sample,
+        failure_reasons=failure_reasons,
         items_seen=items_seen,
         team_game_stats_created=tgs_created,
         team_game_stats_updated=tgs_updated,
