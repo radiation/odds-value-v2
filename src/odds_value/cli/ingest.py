@@ -10,8 +10,18 @@ from odds_value.ingestion.providers.api_sports.ingest.american_football_team_gam
     ingest_api_sports_american_football_team_game_stats,
     ingest_api_sports_american_football_team_game_stats_for_season,
 )
+from odds_value.ingestion.providers.odds_api.ingest.nfl_odds import (
+    ingest_odds_api_nfl_odds_as_of_kickoff_minus_hours_for_season,
+)
 
 app = typer.Typer(help="Ingest provider data into the local DB.")
+
+
+def _split_csv(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",")]
+    return [p for p in parts if p]
 
 
 @app.command("api-sports-season")
@@ -189,3 +199,73 @@ def ingest_api_sports_american_football_team_game_stats_season_cmd(
         typer.echo("Failures (top):")
         for reason, count in top:
             typer.echo(f"  {count}x {reason}")
+
+
+@app.command("odds-api-nfl-odds-season")
+def ingest_odds_api_nfl_odds_season_cmd(
+    season_year: int = typer.Option(..., "--season-year", help="Season year (e.g. 2021)."),
+    league_key: str = typer.Option(
+        "NFL", "--league-key", help="Canonical league key (default: NFL)."
+    ),
+    as_of_hours: int = typer.Option(
+        6,
+        "--as-of-hours",
+        help="Decision-time snapshot offset: captured_at = kickoff - N hours.",
+    ),
+    round_to_hour: bool = typer.Option(
+        True,
+        "--round-to-hour/--no-round-to-hour",
+        help="Round captured_at to the top of the hour before querying Odds API historical snapshots.",
+    ),
+    regions: str = typer.Option(
+        "us",
+        "--regions",
+        help="Odds API regions parameter (e.g. us, us2).",
+    ),
+    markets_csv: str = typer.Option(
+        "spreads,totals,h2h",
+        "--markets",
+        help="Comma-separated markets (spreads, totals, h2h).",
+    ),
+    bookmakers_csv: str | None = typer.Option(
+        None,
+        "--bookmakers",
+        help="Optional comma-separated bookmaker keys to filter (e.g. fanduel,draftkings).",
+    ),
+    commit_every: int = typer.Option(
+        250,
+        "--commit-every",
+        help="Commit after this many games (0 disables intermediate commits).",
+    ),
+) -> None:
+    """Fetch historical NFL odds from The Odds API and upsert decision-time snapshots."""
+
+    markets = _split_csv(markets_csv)
+    bookmakers = _split_csv(bookmakers_csv)
+
+    with session_scope() as session:
+        result = ingest_odds_api_nfl_odds_as_of_kickoff_minus_hours_for_season(
+            session,
+            league_key=league_key,
+            season_year=season_year,
+            as_of_hours=as_of_hours,
+            round_to_hour=round_to_hour,
+            regions=regions,
+            markets=markets,
+            bookmakers=bookmakers,
+            commit_every=commit_every,
+        )
+
+    typer.echo(
+        " ".join(
+            [
+                f"Ingested odds {result.league_key} {result.season_year}:",
+                f"games_seen={result.games_seen}",
+                f"games_matched={result.games_matched}",
+                f"games_missing_in_provider={result.games_missing_in_provider}",
+                f"books_created={result.books_created}",
+                f"snapshots_created={result.snapshots_created}",
+                f"payloads_created={result.payloads_created}",
+            ]
+        )
+    )

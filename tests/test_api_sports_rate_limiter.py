@@ -48,7 +48,10 @@ def test_api_sports_client_reads_rate_limit_headers() -> None:
         def get_json_with_headers(
             self, path: str, *, params: Any | None = None, headers: Any | None = None
         ) -> tuple[dict[str, Any], dict[str, str]]:
-            return {"response": [], "errors": []}, {"X-RateLimit-Limit": "300", "X-RateLimit-Remaining": "299"}
+            return {"response": [], "errors": []}, {
+                "X-RateLimit-Limit": "300",
+                "X-RateLimit-Remaining": "299",
+            }
 
     client = ApiSportsClient(http=DummyHttp(), api_key="k")
     # Should not raise; should update limiter min_interval.

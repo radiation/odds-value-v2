@@ -26,7 +26,9 @@ def upgrade() -> None:
         sa.Column("team_id", sa.Integer(), nullable=False),
         sa.Column("alias", sa.String(length=120), nullable=False),
         sa.Column("alias_norm", sa.String(length=120), nullable=False),
-        sa.Column("alias_type", sa.String(length=32), server_default=sa.text("'name'"), nullable=False),
+        sa.Column(
+            "alias_type", sa.String(length=32), server_default=sa.text("'name'"), nullable=False
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

@@ -96,10 +96,14 @@ def build_football_team_game_state_for_season(
     games = list(session.execute(games_stmt).scalars().all())
 
     if rebuild:
-        session.execute(delete(FootballTeamGameState).where(FootballTeamGameState.season_id == season.id))
+        session.execute(
+            delete(FootballTeamGameState).where(FootballTeamGameState.season_id == season.id)
+        )
         session.commit()
 
-    existing_stmt = select(FootballTeamGameState).where(FootballTeamGameState.season_id == season.id)
+    existing_stmt = select(FootballTeamGameState).where(
+        FootballTeamGameState.season_id == season.id
+    )
     existing = list(session.execute(existing_stmt).scalars().all())
     existing_by_team_game: dict[tuple[int, int], FootballTeamGameState] = {
         (r.team_id, r.game_id): r for r in existing
@@ -112,7 +116,9 @@ def build_football_team_game_state_for_season(
         .where(Game.league_id == league.id, Game.season_id == season.id)
     )
     tgs_rows = list(session.execute(tgs_stmt).scalars().all())
-    tgs_by_game_team: dict[tuple[int, int], TeamGameStats] = {(r.game_id, r.team_id): r for r in tgs_rows}
+    tgs_by_game_team: dict[tuple[int, int], TeamGameStats] = {
+        (r.game_id, r.team_id): r for r in tgs_rows
+    }
 
     fb_stmt = select(FootballTeamGameStats).where(
         FootballTeamGameStats.team_game_stats_id.in_([r.id for r in tgs_rows])
@@ -131,7 +137,9 @@ def build_football_team_game_state_for_season(
         if game.start_time is None or game.home_team_id is None or game.away_team_id is None:
             continue
 
-        if not include_non_regular_season and not in_nfl_regular_season_window(game.start_time, season_year):
+        if not include_non_regular_season and not in_nfl_regular_season_window(
+            game.start_time, season_year
+        ):
             games_skipped += 1
             continue
 

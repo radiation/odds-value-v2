@@ -10,6 +10,7 @@ import httpx
 from .errors import ProviderRateLimited, ProviderRequestError
 
 Json = dict[str, Any]
+JsonValue = object
 
 
 @dataclass
@@ -105,6 +106,47 @@ class BaseHttpClient:
             raise ProviderRequestError(f"Expected JSON object, got {type(data)}")
 
         return data
+
+    def request_json_value(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        json: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> JsonValue:
+        """Perform an HTTP request and return parsed JSON (any JSON type).
+
+        Some providers (e.g., The Odds API) return top-level JSON arrays.
+        This method keeps transport + status handling consistent with `request_json`.
+        """
+
+        resp = self._request(method, path, params=params, json=json, headers=headers)
+
+        if resp.status_code == 429:
+            raise ProviderRateLimited("Provider rate limited the request (HTTP 429).")
+
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise ProviderRequestError(
+                f"HTTP {resp.status_code} for {method} {resp.request.url}"
+            ) from e
+
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise ProviderRequestError("Response was not valid JSON.") from e
+
+    def get_json_value(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> JsonValue:
+        return self.request_json_value("GET", path, params=params, headers=headers)
 
     def request_json_with_headers(
         self,
