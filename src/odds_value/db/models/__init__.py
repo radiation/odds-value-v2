@@ -5,6 +5,7 @@ from odds_value.db.models.core.provider_sport import ProviderSport
 from odds_value.db.models.core.provider_team import ProviderTeam
 from odds_value.db.models.core.season import Season
 from odds_value.db.models.core.team import Team
+from odds_value.db.models.core.team_alias import TeamAlias
 from odds_value.db.models.core.venue import Venue
 from odds_value.db.models.features.baseball_team_game_stats import BaseballTeamGameStats
 from odds_value.db.models.features.football_team_game_state import FootballTeamGameState
@@ -28,6 +29,7 @@ __all__ = [
     "ProviderTeam",
     "Season",
     "Team",
+    "TeamAlias",
     "TeamGameStats",
     "Venue",
 ]

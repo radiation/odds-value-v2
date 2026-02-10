@@ -10,6 +10,7 @@ from odds_value.db.base import Base
 from odds_value.db.enums import GameStatusEnum, ProviderEnum, SportEnum
 from odds_value.db.models.core.game import Game
 from odds_value.db.models.core.league import League
+from odds_value.db.models.core.provider_team import ProviderTeam
 from odds_value.db.models.core.season import Season
 from odds_value.db.models.core.team import Team
 from odds_value.ingestion.providers.api_sports.ingest.american_football_team_game_stats import (
@@ -38,6 +39,14 @@ def test_ingest_api_sports_team_game_stats_upserts_team_game_stats_and_football(
     home = Team(league_id=nfl.id, provider_team_id="12", name="Philadelphia Eagles")
     away = Team(league_id=nfl.id, provider_team_id="10", name="Cincinnati Bengals")
     session.add_all([home, away])
+    session.flush()
+
+    session.add_all(
+        [
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=home.id, provider_team_id="12"),
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=away.id, provider_team_id="10"),
+        ]
+    )
     session.flush()
 
     game = Game(
@@ -112,6 +121,14 @@ def test_ingest_api_sports_team_game_stats_for_season_uses_db_games() -> None:
     home = Team(league_id=nfl.id, provider_team_id="12", name="Philadelphia Eagles")
     away = Team(league_id=nfl.id, provider_team_id="10", name="Cincinnati Bengals")
     session.add_all([home, away])
+    session.flush()
+
+    session.add_all(
+        [
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=home.id, provider_team_id="12"),
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=away.id, provider_team_id="10"),
+        ]
+    )
     session.flush()
 
     session.add_all(
@@ -200,6 +217,14 @@ def test_ingest_api_sports_team_game_stats_for_season_skip_existing() -> None:
     home = Team(league_id=nfl.id, provider_team_id="12", name="Philadelphia Eagles")
     away = Team(league_id=nfl.id, provider_team_id="10", name="Cincinnati Bengals")
     session.add_all([home, away])
+    session.flush()
+
+    session.add_all(
+        [
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=home.id, provider_team_id="12"),
+            ProviderTeam(provider=ProviderEnum.API_SPORTS, team_id=away.id, provider_team_id="10"),
+        ]
+    )
     session.flush()
 
     game = Game(

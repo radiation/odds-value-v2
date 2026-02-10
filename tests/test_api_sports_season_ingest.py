@@ -11,6 +11,8 @@ from odds_value.db.enums import ProviderEnum, SportEnum
 from odds_value.db.models.core.league import League
 from odds_value.db.models.core.provider_league import ProviderLeague
 from odds_value.db.models.core.provider_sport import ProviderSport
+from odds_value.db.models.core.provider_team import ProviderTeam
+from odds_value.db.models.core.team_alias import TeamAlias
 from odds_value.ingestion.providers.api_sports.ingest.american_football_season import (
     ingest_api_sports_american_football_season,
 )
@@ -75,6 +77,12 @@ def test_ingest_api_sports_season_upserts_games_and_teams() -> None:
 
     assert result1.games_created == 1
     assert result1.teams_created == 2
+
+    provider_teams = session.query(ProviderTeam).all()
+    assert len(provider_teams) == 2
+
+    aliases = session.query(TeamAlias).all()
+    assert len(aliases) == 2
 
     # idempotent re-run
     result2 = ingest_api_sports_american_football_season(

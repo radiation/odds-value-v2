@@ -13,15 +13,19 @@ from odds_value.db.enums import GameStatusEnum, ProviderEnum, SportEnum
 from odds_value.db.models.core.game import Game
 from odds_value.db.models.core.league import League
 from odds_value.db.models.core.provider_sport import ProviderSport
+from odds_value.db.models.core.provider_team import ProviderTeam
 from odds_value.db.models.core.season import Season
 from odds_value.db.models.core.team import Team
+from odds_value.db.models.core.team_alias import TeamAlias
 from odds_value.db.models.features.football_team_game_stats import FootballTeamGameStats
 from odds_value.db.models.features.team_game_stats import TeamGameStats
 from odds_value.db.models.ingestion.ingested_payload import IngestedPayload
 from odds_value.db.repos.core.game_repo import GameRepository
 from odds_value.db.repos.core.league_repo import LeagueRepository
 from odds_value.db.repos.core.provider_sport_repo import ProviderSportRepository
+from odds_value.db.repos.core.provider_team_repo import ProviderTeamRepository
 from odds_value.db.repos.core.season_repo import SeasonRepository
+from odds_value.db.repos.core.team_alias_repo import TeamAliasRepository
 from odds_value.db.repos.core.team_repo import TeamRepository
 from odds_value.db.repos.features.football_team_game_stats_repo import (
     FootballTeamGameStatsRepository,
@@ -121,6 +125,8 @@ def ingest_api_sports_american_football_team_game_stats(
 
     game_repo = GameRepository(session)
     team_repo = TeamRepository(session)
+    provider_team_repo = ProviderTeamRepository(session)
+    team_alias_repo = TeamAliasRepository(session)
     team_game_stats_repo = TeamGameStatsRepository(session)
     football_repo = FootballTeamGameStatsRepository(session)
 
@@ -153,17 +159,64 @@ def ingest_api_sports_american_football_team_game_stats(
         if provider_team_id == "None":
             continue
 
-        team = team_repo.first_where(
-            Team.league_id == game.league_id,
-            Team.provider_team_id == provider_team_id,
+        provider_team_name = str(team_obj.get("name") or provider_team_id)
+
+        mapped = provider_team_repo.first_where(
+            ProviderTeam.provider == ProviderEnum.API_SPORTS,
+            ProviderTeam.provider_team_id == provider_team_id,
         )
-        if team is None:
-            team = team_repo.add(
-                Team(
-                    league_id=game.league_id,
+
+        team: Team | None
+        if mapped is not None:
+            team = team_repo.one_where(Team.id == mapped.team_id)
+            if mapped.provider_team_name != provider_team_name:
+                provider_team_repo.patch(
+                    mapped,
+                    {"provider_team_name": provider_team_name},
+                    flush=True,
+                )
+        else:
+            team = team_repo.first_where(
+                Team.league_id == game.league_id,
+                Team.provider_team_id == provider_team_id,
+            )
+            if team is None:
+                team = team_repo.add(
+                    Team(
+                        league_id=game.league_id,
+                        provider_team_id=provider_team_id,
+                        name=provider_team_name,
+                        logo_url=team_obj.get("logo"),
+                    ),
+                    flush=True,
+                )
+            provider_team_repo.add(
+                ProviderTeam(
+                    provider=ProviderEnum.API_SPORTS,
+                    team_id=team.id,
                     provider_team_id=provider_team_id,
-                    name=str(team_obj.get("name") or provider_team_id),
-                    logo_url=team_obj.get("logo"),
+                    provider_team_name=provider_team_name,
+                ),
+                flush=True,
+            )
+
+        assert team is not None
+
+        alias_norm = TeamAlias.norm(provider_team_name)
+        if (
+            team_alias_repo.first_where(
+                TeamAlias.league_id == game.league_id,
+                TeamAlias.alias_norm == alias_norm,
+            )
+            is None
+        ):
+            team_alias_repo.add(
+                TeamAlias(
+                    league_id=game.league_id,
+                    team_id=team.id,
+                    alias=provider_team_name,
+                    alias_norm=alias_norm,
+                    alias_type="name",
                 ),
                 flush=True,
             )

@@ -12,15 +12,19 @@ from odds_value.db.models.core.game import Game
 from odds_value.db.models.core.league import League
 from odds_value.db.models.core.provider_league import ProviderLeague
 from odds_value.db.models.core.provider_sport import ProviderSport
+from odds_value.db.models.core.provider_team import ProviderTeam
 from odds_value.db.models.core.season import Season
 from odds_value.db.models.core.team import Team
+from odds_value.db.models.core.team_alias import TeamAlias
 from odds_value.db.models.core.venue import Venue
 from odds_value.db.models.ingestion.ingested_payload import IngestedPayload
 from odds_value.db.repos.core.game_repo import GameRepository
 from odds_value.db.repos.core.league_repo import LeagueRepository
 from odds_value.db.repos.core.provider_league_repo import ProviderLeagueRepository
 from odds_value.db.repos.core.provider_sport_repo import ProviderSportRepository
+from odds_value.db.repos.core.provider_team_repo import ProviderTeamRepository
 from odds_value.db.repos.core.season_repo import SeasonRepository
+from odds_value.db.repos.core.team_alias_repo import TeamAliasRepository
 from odds_value.db.repos.core.team_repo import TeamRepository
 from odds_value.db.repos.core.venue_repo import VenueRepository
 from odds_value.ingestion.dates import parse_api_sports_game_datetime
@@ -121,6 +125,8 @@ def ingest_api_sports_american_football_season(
     league_repo = LeagueRepository(session)
     season_repo = SeasonRepository(session)
     team_repo = TeamRepository(session)
+    provider_team_repo = ProviderTeamRepository(session)
+    team_alias_repo = TeamAliasRepository(session)
     venue_repo = VenueRepository(session)
     game_repo = GameRepository(session)
 
@@ -165,6 +171,50 @@ def ingest_api_sports_american_football_season(
         def upsert_team(team_data: dict[str, Any]) -> Team:
             nonlocal teams_created
             provider_team_id = str(team_data.get("id"))
+            provider_team_name = str(team_data.get("name") or provider_team_id)
+
+            mapped = provider_team_repo.first_where(
+                ProviderTeam.provider == ProviderEnum.API_SPORTS,
+                ProviderTeam.provider_team_id == provider_team_id,
+            )
+            if mapped is not None:
+                team_row = team_repo.one_where(Team.id == mapped.team_id)
+                # Keep canonical team row fresh.
+                team_repo.patch(
+                    team_row,
+                    {
+                        "name": provider_team_name,
+                        "logo_url": team_data.get("logo"),
+                        "is_active": True,
+                    },
+                    flush=True,
+                )
+                if mapped.provider_team_name != provider_team_name:
+                    provider_team_repo.patch(
+                        mapped,
+                        {"provider_team_name": provider_team_name},
+                        flush=True,
+                    )
+                # Ensure an alias exists for the current name.
+                alias_norm = TeamAlias.norm(provider_team_name)
+                if (
+                    team_alias_repo.first_where(
+                        TeamAlias.league_id == league.id,
+                        TeamAlias.alias_norm == alias_norm,
+                    )
+                    is None
+                ):
+                    team_alias_repo.add(
+                        TeamAlias(
+                            league_id=league.id,
+                            team_id=team_row.id,
+                            alias=provider_team_name,
+                            alias_norm=alias_norm,
+                            alias_type="name",
+                        ),
+                        flush=True,
+                    )
+                return team_row
 
             existing = team_repo.first_where(
                 Team.league_id == league.id,
@@ -172,25 +222,82 @@ def ingest_api_sports_american_football_season(
             )
             if existing is None:
                 teams_created += 1
-                return team_repo.add(
+                existing = team_repo.add(
                     Team(
                         league_id=league.id,
                         provider_team_id=provider_team_id,
-                        name=str(team_data.get("name") or provider_team_id),
+                        name=provider_team_name,
                         logo_url=team_data.get("logo"),
                     ),
                     flush=True,
                 )
 
-            team_repo.patch(
-                existing,
-                {
-                    "name": str(team_data.get("name") or existing.name),
-                    "logo_url": team_data.get("logo"),
-                    "is_active": True,
-                },
-                flush=True,
-            )
+                provider_team_repo.add(
+                    ProviderTeam(
+                        provider=ProviderEnum.API_SPORTS,
+                        team_id=existing.id,
+                        provider_team_id=provider_team_id,
+                        provider_team_name=provider_team_name,
+                    ),
+                    flush=True,
+                )
+            else:
+                team_repo.patch(
+                    existing,
+                    {
+                        "name": provider_team_name,
+                        "logo_url": team_data.get("logo"),
+                        "is_active": True,
+                    },
+                    flush=True,
+                )
+
+                mapped_existing = provider_team_repo.first_where(
+                    ProviderTeam.provider == ProviderEnum.API_SPORTS,
+                    ProviderTeam.provider_team_id == provider_team_id,
+                )
+                if mapped_existing is None:
+                    provider_team_repo.add(
+                        ProviderTeam(
+                            provider=ProviderEnum.API_SPORTS,
+                            team_id=existing.id,
+                            provider_team_id=provider_team_id,
+                            provider_team_name=provider_team_name,
+                        ),
+                        flush=True,
+                    )
+                elif mapped_existing.team_id != existing.id:
+                    raise RuntimeError(
+                        "ProviderTeam mapping mismatch: "
+                        f"provider_team_id={provider_team_id} "
+                        f"mapped_team_id={mapped_existing.team_id} "
+                        f"existing_team_id={existing.id}"
+                    )
+                else:
+                    provider_team_repo.patch(
+                        mapped_existing,
+                        {"provider_team_name": provider_team_name},
+                        flush=True,
+                    )
+
+            alias_norm = TeamAlias.norm(provider_team_name)
+            if (
+                team_alias_repo.first_where(
+                    TeamAlias.league_id == league.id,
+                    TeamAlias.alias_norm == alias_norm,
+                )
+                is None
+            ):
+                team_alias_repo.add(
+                    TeamAlias(
+                        league_id=league.id,
+                        team_id=existing.id,
+                        alias=provider_team_name,
+                        alias_norm=alias_norm,
+                        alias_type="name",
+                    ),
+                    flush=True,
+                )
             return existing
 
         home_team = upsert_team(home)
