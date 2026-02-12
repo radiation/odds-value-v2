@@ -26,7 +26,10 @@ def split_by_season_year(
     """
 
     if not (train_end_year < val_year < test_year):
-        raise ValueError("Require train_end_year < val_year < test_year")
+        raise ValueError(
+            "Require train_end_year < val_year < test_year; "
+            f"got train_end_year={train_end_year}, val_year={val_year}, test_year={test_year}"
+        )
 
     train = [r for r in rows if r.season_year <= train_end_year]
     val = [r for r in rows if r.season_year == val_year]
