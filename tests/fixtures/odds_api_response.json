@@ -1,0 +1,46 @@
+[
+  {
+    "id": "evt-1",
+    "sport_key": "americanfootball_nfl",
+    "sport_title": "NFL",
+    "commence_time": "2021-09-10T00:20:00Z",
+    "home_team": "Tampa Bay Buccaneers",
+    "away_team": "Dallas Cowboys",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "markets": [
+          {
+            "key": "spreads",
+            "outcomes": [
+              {
+                "name": "Tampa Bay Buccaneers",
+                "price": -110,
+                "point": -7.5
+              },
+              {
+                "name": "Dallas Cowboys",
+                "price": -110,
+                "point": 7.5
+              }
+            ]
+          },
+          {
+            "key": "h2h",
+            "outcomes": [
+              {
+                "name": "Tampa Bay Buccaneers",
+                "price": -300
+              },
+              {
+                "name": "Dallas Cowboys",
+                "price": 250
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -74,7 +74,7 @@ def test_ingest_odds_api_nfl_as_of_kickoff_minus_6h_creates_snapshots() -> None:
     session.add(game)
     session.commit()
 
-    sample_path = Path(__file__).parents[1] / "odds-api-repsonse.json"
+    sample_path = Path(__file__).parent / "fixtures" / "odds_api_response.json"
     items = json.loads(sample_path.read_text())
     assert isinstance(items, list)
 

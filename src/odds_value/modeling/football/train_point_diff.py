@@ -53,6 +53,42 @@ class SpreadMarketComparisonResult:
     profit_units: float
 
 
+@dataclass(frozen=True)
+class ResidualTrainResult:
+    feature_names: list[str]
+    train_size: int
+    val_size: int
+    test_size: int
+    train_skipped_no_market: int
+    val_skipped_no_market: int
+    test_skipped_no_market: int
+    train_metrics: RegressionMetrics
+    val_metrics: RegressionMetrics
+    test_metrics: RegressionMetrics
+
+
+@dataclass(frozen=True)
+class ResidualMarketComparisonResult:
+    games_with_market: int
+    rmse_residual: float
+    rmse_pointdiff_from_market_plus_model: float
+    rmse_market_vs_actual: float
+    bets: int
+    wins: int
+    losses: int
+    pushes: int
+    profit_units: float
+
+
+@dataclass(frozen=True)
+class _MarketLabeledRow:
+    row: FootballGameDatasetRow
+    home_spread_line: float
+    market_point_diff: float
+    captured_at: datetime
+    n_books: int
+
+
 def _to_xy(
     rows: list[FootballGameDatasetRow], *, feature_names: list[str]
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -68,6 +104,56 @@ def _metrics(y_true: np.ndarray, y_pred: np.ndarray) -> RegressionMetrics:
         rmse=float(np.sqrt(mse)),
         r2=float(r2_score(y_true, y_pred)),
     )
+
+
+def _label_rows_with_market_spread(
+    session: Session,
+    *,
+    rows: list[FootballGameDatasetRow],
+    as_of_hours: int,
+    round_to_hour: bool,
+    window_minutes: int,
+    book_keys: set[str] | None,
+) -> tuple[list[_MarketLabeledRow], int]:
+    labeled: list[_MarketLabeledRow] = []
+    skipped = 0
+
+    window = timedelta(minutes=window_minutes)
+
+    for r in rows:
+        target = _as_utc(r.start_time) - timedelta(hours=as_of_hours)
+        if round_to_hour:
+            target = target.replace(minute=0, second=0, microsecond=0)
+        else:
+            target = target.replace(second=0, microsecond=0)
+
+        consensus = _consensus_line_for_game_at(
+            session,
+            game_id=r.game_id,
+            market_type=MarketTypeEnum.SPREAD,
+            side_type=SideTypeEnum.HOME,
+            target_dt=target,
+            window=window,
+            book_keys=book_keys,
+        )
+        if consensus is None:
+            skipped += 1
+            continue
+
+        home_spread_line, captured_at, n_books = consensus
+        market_point_diff = -float(home_spread_line)
+
+        labeled.append(
+            _MarketLabeledRow(
+                row=r,
+                home_spread_line=float(home_spread_line),
+                market_point_diff=float(market_point_diff),
+                captured_at=captured_at,
+                n_books=int(n_books),
+            )
+        )
+
+    return labeled, skipped
 
 
 def train_point_diff_ridge(
@@ -342,6 +428,251 @@ def compare_point_diff_model_vs_spread_market(
     return SpreadMarketComparisonResult(
         games_with_market=len(actuals),
         rmse_model_vs_actual=rmse_model,
+        rmse_market_vs_actual=rmse_market,
+        bets=bets,
+        wins=wins,
+        losses=losses,
+        pushes=pushes,
+        profit_units=profit_units,
+    )
+
+
+def train_residual_vs_spread_ridge(
+    session: Session,
+    *,
+    train_rows: list[FootballGameDatasetRow],
+    val_rows: list[FootballGameDatasetRow],
+    test_rows: list[FootballGameDatasetRow],
+    alpha: float = 1.0,
+    as_of_hours: int = 6,
+    round_to_hour: bool = True,
+    window_minutes: int = 180,
+    book_keys: list[str] | None = None,
+) -> tuple[ResidualTrainResult, Pipeline]:
+    """Train Ridge on residuals: (actual point_diff - market_implied_point_diff).
+
+    Market implied point_diff is derived from the HOME spread line: `-home_spread_line`.
+    Only games with an available market snapshot in the window are used.
+    """
+
+    book_key_set = {k.strip() for k in book_keys or [] if k.strip()} or None
+
+    labeled_train, skipped_train = _label_rows_with_market_spread(
+        session,
+        rows=train_rows,
+        as_of_hours=as_of_hours,
+        round_to_hour=round_to_hour,
+        window_minutes=window_minutes,
+        book_keys=book_key_set,
+    )
+    labeled_val, skipped_val = _label_rows_with_market_spread(
+        session,
+        rows=val_rows,
+        as_of_hours=as_of_hours,
+        round_to_hour=round_to_hour,
+        window_minutes=window_minutes,
+        book_keys=book_key_set,
+    )
+    labeled_test, skipped_test = _label_rows_with_market_spread(
+        session,
+        rows=test_rows,
+        as_of_hours=as_of_hours,
+        round_to_hour=round_to_hour,
+        window_minutes=window_minutes,
+        book_keys=book_key_set,
+    )
+
+    if not labeled_train:
+        raise ValueError("No training rows have market spreads available")
+
+    feature_names = sorted({k for lr in labeled_train for k in lr.row.features})
+    if not feature_names:
+        raise ValueError("No feature columns found in training rows")
+
+    def _to_xy_residual(
+        labeled_rows: list[_MarketLabeledRow],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        x = np.array(
+            [[lr.row.features.get(f, 0.0) for f in feature_names] for lr in labeled_rows],
+            dtype=float,
+        )
+        y = np.array(
+            [float(lr.row.point_diff) - float(lr.market_point_diff) for lr in labeled_rows],
+            dtype=float,
+        )
+        return x, y
+
+    x_train, y_train = _to_xy_residual(labeled_train)
+    x_val, y_val = _to_xy_residual(labeled_val) if labeled_val else (np.empty((0, 0)), np.array([]))
+    x_test, y_test = (
+        _to_xy_residual(labeled_test) if labeled_test else (np.empty((0, 0)), np.array([]))
+    )
+
+    model: Pipeline = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            ("ridge", Ridge(alpha=alpha)),
+        ]
+    )
+
+    model.fit(x_train, y_train)
+
+    train_pred = model.predict(x_train)
+    val_pred = model.predict(x_val) if len(labeled_val) else np.array([], dtype=float)
+    test_pred = model.predict(x_test) if len(labeled_test) else np.array([], dtype=float)
+
+    train_metrics = _metrics(y_train, train_pred)
+    val_metrics = (
+        _metrics(y_val, val_pred) if len(labeled_val) else RegressionMetrics(0.0, 0.0, 0.0)
+    )
+    test_metrics = (
+        _metrics(y_test, test_pred) if len(labeled_test) else RegressionMetrics(0.0, 0.0, 0.0)
+    )
+
+    result = ResidualTrainResult(
+        feature_names=feature_names,
+        train_size=len(labeled_train),
+        val_size=len(labeled_val),
+        test_size=len(labeled_test),
+        train_skipped_no_market=skipped_train,
+        val_skipped_no_market=skipped_val,
+        test_skipped_no_market=skipped_test,
+        train_metrics=train_metrics,
+        val_metrics=val_metrics,
+        test_metrics=test_metrics,
+    )
+
+    return result, model
+
+
+def compare_residual_model_vs_spread_market(
+    session: Session,
+    *,
+    rows: list[FootballGameDatasetRow],
+    model: Pipeline,
+    feature_names: list[str],
+    as_of_hours: int = 6,
+    round_to_hour: bool = True,
+    window_minutes: int = 180,
+    min_edge_points: float = 1.0,
+    vig_price: int = -110,
+    book_keys: list[str] | None = None,
+) -> ResidualMarketComparisonResult:
+    """Evaluate a residual model and translate it into point_diff + ATS betting.
+
+    residual_pred is interpreted as: predicted (actual_point_diff - market_point_diff).
+    Therefore predicted point_diff = market_point_diff + residual_pred.
+
+    Betting simulation matches the point_diff-vs-market approach, except the edge is residual_pred.
+    """
+
+    if not rows:
+        return ResidualMarketComparisonResult(
+            games_with_market=0,
+            rmse_residual=0.0,
+            rmse_pointdiff_from_market_plus_model=0.0,
+            rmse_market_vs_actual=0.0,
+            bets=0,
+            wins=0,
+            losses=0,
+            pushes=0,
+            profit_units=0.0,
+        )
+
+    # -110 => risk 1.0 to win 0.9091 units
+    if vig_price >= 0:
+        raise ValueError("vig_price should be negative American odds (e.g. -110)")
+    win_profit = 100.0 / float(-vig_price)
+
+    book_key_set = {k.strip() for k in book_keys or [] if k.strip()} or None
+    labeled, _skipped = _label_rows_with_market_spread(
+        session,
+        rows=rows,
+        as_of_hours=as_of_hours,
+        round_to_hour=round_to_hour,
+        window_minutes=window_minutes,
+        book_keys=book_key_set,
+    )
+
+    if not labeled:
+        return ResidualMarketComparisonResult(
+            games_with_market=0,
+            rmse_residual=0.0,
+            rmse_pointdiff_from_market_plus_model=0.0,
+            rmse_market_vs_actual=0.0,
+            bets=0,
+            wins=0,
+            losses=0,
+            pushes=0,
+            profit_units=0.0,
+        )
+
+    x = np.array(
+        [[lr.row.features.get(f, 0.0) for f in feature_names] for lr in labeled], dtype=float
+    )
+    residual_pred = model.predict(x)
+
+    bets = 0
+    wins = 0
+    losses = 0
+    pushes = 0
+    profit_units = 0.0
+
+    residual_true: list[float] = []
+    residual_preds: list[float] = []
+    point_true: list[float] = []
+    point_pred: list[float] = []
+    market_point: list[float] = []
+
+    for lr, r_pred in zip(labeled, residual_pred, strict=True):
+        actual = float(lr.row.point_diff)
+        market_pd = float(lr.market_point_diff)
+        r_true = actual - market_pd
+
+        residual_true.append(r_true)
+        residual_preds.append(float(r_pred))
+        point_true.append(actual)
+        point_pred.append(market_pd + float(r_pred))
+        market_point.append(market_pd)
+
+        edge = float(r_pred)
+        if edge >= min_edge_points:
+            bets += 1
+            cover_margin = actual + float(lr.home_spread_line)
+            if cover_margin > 0:
+                wins += 1
+                profit_units += win_profit
+            elif cover_margin < 0:
+                losses += 1
+                profit_units -= 1.0
+            else:
+                pushes += 1
+        elif edge <= -min_edge_points:
+            bets += 1
+            cover_margin = actual + float(lr.home_spread_line)
+            if cover_margin < 0:
+                wins += 1
+                profit_units += win_profit
+            elif cover_margin > 0:
+                losses += 1
+                profit_units -= 1.0
+            else:
+                pushes += 1
+
+    y_res_true = np.array(residual_true, dtype=float)
+    y_res_pred = np.array(residual_preds, dtype=float)
+    y_pd_true = np.array(point_true, dtype=float)
+    y_pd_pred = np.array(point_pred, dtype=float)
+    y_market = np.array(market_point, dtype=float)
+
+    rmse_residual = float(np.sqrt(float(mean_squared_error(y_res_true, y_res_pred))))
+    rmse_pointdiff = float(np.sqrt(float(mean_squared_error(y_pd_true, y_pd_pred))))
+    rmse_market = float(np.sqrt(float(mean_squared_error(y_pd_true, y_market))))
+
+    return ResidualMarketComparisonResult(
+        games_with_market=len(labeled),
+        rmse_residual=rmse_residual,
+        rmse_pointdiff_from_market_plus_model=rmse_pointdiff,
         rmse_market_vs_actual=rmse_market,
         bets=bets,
         wins=wins,
