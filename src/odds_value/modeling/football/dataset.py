@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from datetime import datetime
+from math import log, pow
 from pathlib import Path
 
 from sqlalchemy import select
@@ -86,6 +87,11 @@ def build_football_game_dataset(
     season_start_year: int | None = None,
     season_end_year: int | None = None,
     require_final: bool = True,
+    include_elo_features: bool = False,
+    elo_initial: float = 1500.0,
+    elo_k: float = 20.0,
+    elo_home_field_advantage: float = 55.0,
+    elo_regress_to_mean: float = 0.33,
 ) -> list[FootballGameDatasetRow]:
     """Build a game-level modeling dataset from `football_team_game_state`.
 
@@ -97,6 +103,9 @@ def build_football_game_dataset(
     - `home_win` = 1 if home_score > away_score else 0
 
     Split guidance: do time-based splits by `season_year` (or `start_time`) to avoid leakage.
+
+    Optional features:
+    - Elo ratings (if include_elo_features=True): pregame team strength computed from prior games only.
     """
 
     league_repo = LeagueRepository(session)
@@ -134,6 +143,19 @@ def build_football_game_dataset(
 
     rows: list[FootballGameDatasetRow] = []
 
+    # Optional team-strength signal derived from past results only (no leakage).
+    elo_by_team_id: dict[int, float] = {}
+    last_season_year: int | None = None
+
+    def _elo_expected(home_elo: float, away_elo: float) -> float:
+        exp = (away_elo - (home_elo + elo_home_field_advantage)) / 400.0
+        return 1.0 / (1.0 + pow(10.0, exp))
+
+    def _elo_mov_multiplier(point_diff: float) -> float:
+        # Common Elo margin-of-victory multiplier (bounded, diminishing returns).
+        margin = abs(point_diff)
+        return log(margin + 1.0) * (2.2 / ((margin * 0.001) + 2.2))
+
     for game, season_year, hs, aws in session.execute(stmt).all():
         if (
             game.id is None
@@ -146,6 +168,24 @@ def build_football_game_dataset(
             continue
 
         features: dict[str, float] = {}
+
+        season_year_i = int(season_year)
+        if include_elo_features:
+            if last_season_year is None:
+                last_season_year = season_year_i
+            elif season_year_i != last_season_year:
+                # Regress toward the mean at season boundaries (reduces stale carryover).
+                for team_id, rating in list(elo_by_team_id.items()):
+                    elo_by_team_id[team_id] = elo_initial + (rating - elo_initial) * (
+                        1.0 - elo_regress_to_mean
+                    )
+                last_season_year = season_year_i
+
+            home_elo_pre = float(elo_by_team_id.get(int(game.home_team_id), elo_initial))
+            away_elo_pre = float(elo_by_team_id.get(int(game.away_team_id), elo_initial))
+            features["elo_home_pre"] = home_elo_pre
+            features["elo_away_pre"] = away_elo_pre
+            features["elo_diff_pre"] = home_elo_pre - away_elo_pre
 
         # Encode state columns as home/away + diff.
         for col in _NUMERIC_STATE_COLUMNS:
@@ -165,7 +205,7 @@ def build_football_game_dataset(
         rows.append(
             FootballGameDatasetRow(
                 game_id=int(game.id),
-                season_year=int(season_year),
+                season_year=season_year_i,
                 week=week,
                 start_time=game.start_time,
                 home_team_id=int(game.home_team_id),
@@ -178,6 +218,24 @@ def build_football_game_dataset(
                 features=features,
             )
         )
+
+        if include_elo_features:
+            home_id = int(game.home_team_id)
+            away_id = int(game.away_team_id)
+            home_elo = float(elo_by_team_id.get(home_id, elo_initial))
+            away_elo = float(elo_by_team_id.get(away_id, elo_initial))
+
+            expected_home = _elo_expected(home_elo, away_elo)
+            if point_diff > 0:
+                actual_home = 1.0
+            elif point_diff < 0:
+                actual_home = 0.0
+            else:
+                actual_home = 0.5
+
+            delta = elo_k * _elo_mov_multiplier(float(point_diff)) * (actual_home - expected_home)
+            elo_by_team_id[home_id] = home_elo + delta
+            elo_by_team_id[away_id] = away_elo - delta
 
     return rows
 

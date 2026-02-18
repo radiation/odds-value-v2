@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from statistics import median
+from statistics import median, median_low
 
 import numpy as np
 from sklearn.linear_model import Ridge  # type: ignore[import-untyped]
@@ -14,7 +14,7 @@ from sklearn.metrics import (  # type: ignore[import-untyped]
 )
 from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
 from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from odds_value.db.enums import MarketTypeEnum, SideTypeEnum
@@ -51,6 +51,8 @@ class SpreadMarketComparisonResult:
     losses: int
     pushes: int
     profit_units: float
+    sum_win_profit_units: float
+    breakeven_win_rate: float
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ class ResidualMarketComparisonResult:
     losses: int
     pushes: int
     profit_units: float
+    sum_win_profit_units: float
+    breakeven_win_rate: float
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,21 @@ class _MarketLabeledRow:
     market_point_diff: float
     captured_at: datetime
     n_books: int
+
+
+def _features_for_labeled_row(
+    lr: _MarketLabeledRow, *, include_market_features: bool
+) -> dict[str, float]:
+    base = lr.row.features
+    if not include_market_features:
+        return base
+
+    # Copy to avoid mutating the underlying dataset row.
+    merged: dict[str, float] = dict(base)
+    merged["market_point_diff"] = float(lr.market_point_diff)
+    merged["home_spread_line"] = float(lr.home_spread_line)
+    merged["market_n_books"] = float(lr.n_books)
+    return merged
 
 
 def _to_xy(
@@ -215,6 +234,69 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(UTC)
 
 
+def _win_profit_units_for_american_price(price: int) -> float:
+    """Return profit (in units) for a 1.0 unit stake when the bet wins.
+
+    Examples:
+    - -110 => 0.9091
+    - +120 => 1.2
+    """
+
+    if price == 0:
+        raise ValueError("American odds price cannot be 0")
+
+    if price > 0:
+        return float(price) / 100.0
+    return 100.0 / float(-price)
+
+
+def _median_price_for_game_at_captured_at(
+    session: Session,
+    *,
+    game_id: int,
+    market_type: MarketTypeEnum,
+    side_type: SideTypeEnum,
+    captured_at: datetime,
+    line: float | None,
+    book_keys: set[str] | None = None,
+) -> float | None:
+    stmt = (
+        select(OddsSnapshot.price)
+        .join(Book, Book.id == OddsSnapshot.book_id)
+        .where(
+            OddsSnapshot.game_id == game_id,
+            OddsSnapshot.market_type == market_type,
+            OddsSnapshot.side_type == side_type,
+            OddsSnapshot.captured_at == captured_at,
+            OddsSnapshot.line.is_not(None),
+            OddsSnapshot.price != 0,
+        )
+    )
+
+    if line is not None:
+        # Avoid exact equality on floats/NUMERIC; tolerate tiny representation differences.
+        stmt = stmt.where(func.abs(OddsSnapshot.line - float(line)) < 0.001)
+
+    if book_keys:
+        stmt = stmt.where(Book.key.in_(sorted(book_keys)))
+
+    prices = list(session.execute(stmt).scalars().all())
+    if not prices:
+        return None
+
+    win_profits: list[float] = []
+    for p in prices:
+        try:
+            win_profits.append(_win_profit_units_for_american_price(int(p)))
+        except ValueError:
+            continue
+
+    if not win_profits:
+        return None
+
+    return float(median(win_profits))
+
+
 def _consensus_line_for_game_at(
     session: Session,
     *,
@@ -225,7 +307,7 @@ def _consensus_line_for_game_at(
     window: timedelta,
     book_keys: set[str] | None = None,
 ) -> tuple[float, datetime, int] | None:
-    """Return (median_line, captured_at, n_books) closest to target_dt.
+    """Return (consensus_line, captured_at, n_books) closest to target_dt.
 
     This is robust to The Odds API returning a snapshot timestamp slightly different
     from the requested `date`, by searching within a window.
@@ -276,8 +358,10 @@ def _consensus_line_for_game_at(
         dt_delta_s = abs((_as_utc(captured_at) - target_dt).total_seconds())
         n_books = len(lines)
 
+        consensus_line = float(median_low(lines))
+
         if best is None:
-            best = (float(median(lines)), captured_at, n_books)
+            best = (consensus_line, captured_at, n_books)
             best_dt_delta_s = dt_delta_s
             best_n_books = n_books
             continue
@@ -286,7 +370,7 @@ def _consensus_line_for_game_at(
         if (dt_delta_s < best_dt_delta_s) or (
             dt_delta_s == best_dt_delta_s and n_books > best_n_books
         ):
-            best = (float(median(lines)), captured_at, n_books)
+            best = (consensus_line, captured_at, n_books)
             best_dt_delta_s = dt_delta_s
             best_n_books = n_books
 
@@ -303,6 +387,7 @@ def compare_point_diff_model_vs_spread_market(
     round_to_hour: bool = True,
     window_minutes: int = 180,
     min_edge_points: float = 1.0,
+    min_market_books: int = 1,
     vig_price: int = -110,
     book_keys: list[str] | None = None,
 ) -> SpreadMarketComparisonResult:
@@ -310,11 +395,15 @@ def compare_point_diff_model_vs_spread_market(
 
     Uses the HOME-side spread line to derive a market implied point_diff: `-home_spread_line`.
 
-    Betting simulation:
+        Betting simulation:
     - Bet HOME if model - market >= min_edge_points
     - Bet AWAY if model - market <= -min_edge_points
     - Else no bet
-    Assumes a fixed American odds price (default -110).
+
+        Pricing:
+        - Uses the median `OddsSnapshot.price` (American odds) across eligible books at the
+            chosen `captured_at` for the bet side.
+        - If price is unavailable for that side at that `captured_at`, falls back to `vig_price`.
     """
 
     if not rows:
@@ -327,6 +416,8 @@ def compare_point_diff_model_vs_spread_market(
             losses=0,
             pushes=0,
             profit_units=0.0,
+            sum_win_profit_units=0.0,
+            breakeven_win_rate=0.0,
         )
 
     x, _y_true = _to_xy(rows, feature_names=feature_names)
@@ -334,11 +425,6 @@ def compare_point_diff_model_vs_spread_market(
 
     if len(y_pred) != len(rows):
         raise ValueError("Model prediction output length mismatch")
-
-    # -110 => risk 1.0 to win 0.9091 units
-    if vig_price >= 0:
-        raise ValueError("vig_price should be negative American odds (e.g. -110)")
-    win_profit = 100.0 / float(-vig_price)
 
     market_preds: list[float] = []
     model_preds: list[float] = []
@@ -349,9 +435,13 @@ def compare_point_diff_model_vs_spread_market(
     losses = 0
     pushes = 0
     profit_units = 0.0
+    sum_win_profit_units = 0.0
 
     window = timedelta(minutes=window_minutes)
     book_key_set = {k.strip() for k in book_keys or [] if k.strip()} or None
+
+    if min_market_books < 1:
+        raise ValueError("min_market_books must be >= 1")
 
     for r, pred in zip(rows, y_pred, strict=True):
         target = _as_utc(r.start_time) - timedelta(hours=as_of_hours)
@@ -373,6 +463,8 @@ def compare_point_diff_model_vs_spread_market(
             continue
 
         home_spread_line, _captured_at, _n_books = consensus
+        if int(_n_books) < int(min_market_books):
+            continue
         market_point_diff = -float(home_spread_line)
 
         actual = float(r.point_diff)
@@ -381,30 +473,56 @@ def compare_point_diff_model_vs_spread_market(
         actuals.append(actual)
 
         edge = float(pred) - market_point_diff
+        bet_side: SideTypeEnum | None
         if edge >= min_edge_points:
-            # Bet HOME against spread.
-            bets += 1
-            cover_margin = actual + float(home_spread_line)
-            if cover_margin > 0:
-                wins += 1
-                profit_units += win_profit
-            elif cover_margin < 0:
-                losses += 1
-                profit_units -= 1.0
-            else:
-                pushes += 1
+            bet_side = SideTypeEnum.HOME
         elif edge <= -min_edge_points:
-            # Bet AWAY against spread.
+            bet_side = SideTypeEnum.AWAY
+        else:
+            bet_side = None
+
+        if bet_side is not None:
+            win_profit_median = _median_price_for_game_at_captured_at(
+                session,
+                game_id=r.game_id,
+                market_type=MarketTypeEnum.SPREAD,
+                side_type=bet_side,
+                captured_at=_captured_at,
+                line=(
+                    float(home_spread_line)
+                    if bet_side == SideTypeEnum.HOME
+                    else -float(home_spread_line)
+                ),
+                book_keys=book_key_set,
+            )
+            win_profit = (
+                float(win_profit_median)
+                if win_profit_median is not None
+                else _win_profit_units_for_american_price(int(vig_price))
+            )
+
             bets += 1
+            sum_win_profit_units += win_profit
             cover_margin = actual + float(home_spread_line)
-            if cover_margin < 0:
-                wins += 1
-                profit_units += win_profit
-            elif cover_margin > 0:
-                losses += 1
-                profit_units -= 1.0
+
+            if bet_side == SideTypeEnum.HOME:
+                if cover_margin > 0:
+                    wins += 1
+                    profit_units += win_profit
+                elif cover_margin < 0:
+                    losses += 1
+                    profit_units -= 1.0
+                else:
+                    pushes += 1
             else:
-                pushes += 1
+                if cover_margin < 0:
+                    wins += 1
+                    profit_units += win_profit
+                elif cover_margin > 0:
+                    losses += 1
+                    profit_units -= 1.0
+                else:
+                    pushes += 1
 
     if not actuals:
         return SpreadMarketComparisonResult(
@@ -416,6 +534,10 @@ def compare_point_diff_model_vs_spread_market(
             losses=losses,
             pushes=pushes,
             profit_units=profit_units,
+            sum_win_profit_units=sum_win_profit_units,
+            breakeven_win_rate=(
+                float(bets) / (float(bets) + float(sum_win_profit_units)) if bets else 0.0
+            ),
         )
 
     y_actual = np.array(actuals, dtype=float)
@@ -424,6 +546,8 @@ def compare_point_diff_model_vs_spread_market(
 
     rmse_model = float(np.sqrt(float(mean_squared_error(y_actual, y_model))))
     rmse_market = float(np.sqrt(float(mean_squared_error(y_actual, y_market))))
+
+    breakeven_win_rate = float(bets) / (float(bets) + float(sum_win_profit_units)) if bets else 0.0
 
     return SpreadMarketComparisonResult(
         games_with_market=len(actuals),
@@ -434,6 +558,8 @@ def compare_point_diff_model_vs_spread_market(
         losses=losses,
         pushes=pushes,
         profit_units=profit_units,
+        sum_win_profit_units=sum_win_profit_units,
+        breakeven_win_rate=breakeven_win_rate,
     )
 
 
@@ -448,6 +574,7 @@ def train_residual_vs_spread_ridge(
     round_to_hour: bool = True,
     window_minutes: int = 180,
     book_keys: list[str] | None = None,
+    include_market_features: bool = False,
 ) -> tuple[ResidualTrainResult, Pipeline]:
     """Train Ridge on residuals: (actual point_diff - market_implied_point_diff).
 
@@ -485,15 +612,25 @@ def train_residual_vs_spread_ridge(
     if not labeled_train:
         raise ValueError("No training rows have market spreads available")
 
-    feature_names = sorted({k for lr in labeled_train for k in lr.row.features})
+    feature_names = sorted(
+        {
+            k
+            for lr in labeled_train
+            for k in _features_for_labeled_row(lr, include_market_features=include_market_features)
+        }
+    )
     if not feature_names:
         raise ValueError("No feature columns found in training rows")
 
     def _to_xy_residual(
         labeled_rows: list[_MarketLabeledRow],
     ) -> tuple[np.ndarray, np.ndarray]:
+        feature_dicts = [
+            _features_for_labeled_row(lr, include_market_features=include_market_features)
+            for lr in labeled_rows
+        ]
         x = np.array(
-            [[lr.row.features.get(f, 0.0) for f in feature_names] for lr in labeled_rows],
+            [[fd.get(f, 0.0) for f in feature_names] for fd in feature_dicts],
             dtype=float,
         )
         y = np.array(
@@ -555,8 +692,10 @@ def compare_residual_model_vs_spread_market(
     round_to_hour: bool = True,
     window_minutes: int = 180,
     min_edge_points: float = 1.0,
+    min_market_books: int = 1,
     vig_price: int = -110,
     book_keys: list[str] | None = None,
+    include_market_features: bool = False,
 ) -> ResidualMarketComparisonResult:
     """Evaluate a residual model and translate it into point_diff + ATS betting.
 
@@ -577,12 +716,9 @@ def compare_residual_model_vs_spread_market(
             losses=0,
             pushes=0,
             profit_units=0.0,
+            sum_win_profit_units=0.0,
+            breakeven_win_rate=0.0,
         )
-
-    # -110 => risk 1.0 to win 0.9091 units
-    if vig_price >= 0:
-        raise ValueError("vig_price should be negative American odds (e.g. -110)")
-    win_profit = 100.0 / float(-vig_price)
 
     book_key_set = {k.strip() for k in book_keys or [] if k.strip()} or None
     labeled, _skipped = _label_rows_with_market_spread(
@@ -593,6 +729,12 @@ def compare_residual_model_vs_spread_market(
         window_minutes=window_minutes,
         book_keys=book_key_set,
     )
+
+    if min_market_books < 1:
+        raise ValueError("min_market_books must be >= 1")
+
+    if labeled and min_market_books > 1:
+        labeled = [lr for lr in labeled if lr.n_books >= min_market_books]
 
     if not labeled:
         return ResidualMarketComparisonResult(
@@ -605,11 +747,15 @@ def compare_residual_model_vs_spread_market(
             losses=0,
             pushes=0,
             profit_units=0.0,
+            sum_win_profit_units=0.0,
+            breakeven_win_rate=0.0,
         )
 
-    x = np.array(
-        [[lr.row.features.get(f, 0.0) for f in feature_names] for lr in labeled], dtype=float
-    )
+    feature_dicts = [
+        _features_for_labeled_row(lr, include_market_features=include_market_features)
+        for lr in labeled
+    ]
+    x = np.array([[fd.get(f, 0.0) for f in feature_names] for fd in feature_dicts], dtype=float)
     residual_pred = model.predict(x)
 
     bets = 0
@@ -617,6 +763,7 @@ def compare_residual_model_vs_spread_market(
     losses = 0
     pushes = 0
     profit_units = 0.0
+    sum_win_profit_units = 0.0
 
     residual_true: list[float] = []
     residual_preds: list[float] = []
@@ -637,7 +784,24 @@ def compare_residual_model_vs_spread_market(
 
         edge = float(r_pred)
         if edge >= min_edge_points:
+            bet_side = SideTypeEnum.HOME
+            win_profit_median = _median_price_for_game_at_captured_at(
+                session,
+                game_id=lr.row.game_id,
+                market_type=MarketTypeEnum.SPREAD,
+                side_type=bet_side,
+                captured_at=lr.captured_at,
+                line=float(lr.home_spread_line),
+                book_keys=book_key_set,
+            )
+            win_profit = (
+                float(win_profit_median)
+                if win_profit_median is not None
+                else _win_profit_units_for_american_price(int(vig_price))
+            )
+
             bets += 1
+            sum_win_profit_units += win_profit
             cover_margin = actual + float(lr.home_spread_line)
             if cover_margin > 0:
                 wins += 1
@@ -648,7 +812,24 @@ def compare_residual_model_vs_spread_market(
             else:
                 pushes += 1
         elif edge <= -min_edge_points:
+            bet_side = SideTypeEnum.AWAY
+            win_profit_median = _median_price_for_game_at_captured_at(
+                session,
+                game_id=lr.row.game_id,
+                market_type=MarketTypeEnum.SPREAD,
+                side_type=bet_side,
+                captured_at=lr.captured_at,
+                line=-float(lr.home_spread_line),
+                book_keys=book_key_set,
+            )
+            win_profit = (
+                float(win_profit_median)
+                if win_profit_median is not None
+                else _win_profit_units_for_american_price(int(vig_price))
+            )
+
             bets += 1
+            sum_win_profit_units += win_profit
             cover_margin = actual + float(lr.home_spread_line)
             if cover_margin < 0:
                 wins += 1
@@ -669,6 +850,8 @@ def compare_residual_model_vs_spread_market(
     rmse_pointdiff = float(np.sqrt(float(mean_squared_error(y_pd_true, y_pd_pred))))
     rmse_market = float(np.sqrt(float(mean_squared_error(y_pd_true, y_market))))
 
+    breakeven_win_rate = float(bets) / (float(bets) + float(sum_win_profit_units)) if bets else 0.0
+
     return ResidualMarketComparisonResult(
         games_with_market=len(labeled),
         rmse_residual=rmse_residual,
@@ -679,4 +862,6 @@ def compare_residual_model_vs_spread_market(
         losses=losses,
         pushes=pushes,
         profit_units=profit_units,
+        sum_win_profit_units=sum_win_profit_units,
+        breakeven_win_rate=breakeven_win_rate,
     )
